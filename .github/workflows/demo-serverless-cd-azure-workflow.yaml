@@ -1,0 +1,64 @@
+name: demo-serverless-azf-ci-cd-workflow
+
+run-name: "${{ github.actor }}-${{ github.run_id }}-${{ github.event_name }}-${{ inputs.environment || 'sandbox' }}-ci-cd-azf"
+
+concurrency: # es como se maneja multiples ejecuciones de un mismo workflow / al ser default se da prioridad a la ejecucion mas reciente
+  group: default 
+
+on:
+  push: # Se ejecuta al hacer un push a la rama main
+    branches:
+      - main
+  pull_request: # Se ejecuta al hacer un pull request a la rama main
+    branches:
+      - main
+  workflow_dispatch: # permite ejecutar el workflow manualmente (Bajo demanda)
+    inputs: # Se definen los inputs que se pueden pasar al workflow
+      environment: # Tipo de entorno a desplegar
+        description: Environment to deploy
+        type: choice
+        options:
+          - 'sandbox'
+          - 'development'
+        required: true
+        default: 'sandbox'
+
+jobs:
+  continuos_integration_job:
+    uses: ./.github/workflows/demo-serverless-ci-workflow.yaml
+    with:
+      infraestructure_target: 'AzureFunction'
+      node_version: ${{ inputs.infraestructure == 'Lambda' && '14.x' || '18.x' }} #FIX For educational use only
+    secrets: inherit
+
+  continuos-deployment-job:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: continuos_integration_job
+    environment: ${{ inputs.environment || 'sandbox' }}
+    steps:
+    - name: Download artifact from build job
+      uses: actions/download-artifact@v4
+      with:
+       name: ${{ needs.continuos_integration_job.outputs.artifact_base_name }}-ci
+
+    - name: 'Login via Azure CLI'
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_RBAC_CREDENTIALS }}
+      
+    - name: unzip artifact for deployment
+      run: unzip ${{ needs.continuos_integration_job.outputs.artifact_base_name }}.zip -d workspace
+
+    - name: unzip output
+      run: ls -ls workspace
+
+    - name: "Deploy stage"
+      run: echo "Deploy started!"
+    
+    - name: 'Run Azure Functions action'
+      uses: Azure/functions-action@v1
+      with:
+        app-name: ${{ vars.AZF_NAME }}
+        package: ./workspace
